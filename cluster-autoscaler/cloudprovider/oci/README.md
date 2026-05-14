@@ -303,8 +303,9 @@ kubectl apply -f ./cloudprovider/oci/examples/oci-nodepool-cluster-autoscaler-w-
 
   **Recommendation**: if your workloads request `ephemeral-storage` and your node pool may scale from
   zero, either ensure `NodeSourceDetails.BootVolumeSizeInGBs` is set on the node pool, or add the
-  freeform tag `cluster-autoscaler/node-ephemeral-storage=<value>` with a value at or below the real
-  node's kubelet-reported `allocatable.ephemeral-storage`.
+  freeform tag `cluster-autoscaler/node-ephemeral-storage=<value>` with a value matching the real
+  node's kubelet-reported `allocatable.ephemeral-storage` (slightly less than the raw boot-volume
+  size). This prevents the scheduler from over-counting available storage on the template node.
 
 ## Helpful links
 - [Oracle Cloud Infrastructure home](https://cloud.oracle.com)
