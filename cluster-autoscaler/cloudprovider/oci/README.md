@@ -288,6 +288,23 @@ kubectl apply -f ./cloudprovider/oci/examples/oci-nodepool-cluster-autoscaler-w-
 - `--node-autoprovisioning-enabled=true` are not supported.
 - `--node-group-auto-discovery` and `node` parameters can not be used together as it can cause conflicts.
 - We set a `nvidia.com/gpu:NoSchedule` taint on nodes in a GPU enabled pools.
+- **Ephemeral-storage for OKE node pools scaling from zero**: when a node pool has no running nodes,
+  the autoscaler builds a synthetic template node to simulate scheduling. The `ephemeral-storage`
+  capacity of that template node is determined in the following order of precedence (applies to OKE
+  node pools only; instance pools are unaffected):
+  1. The freeform tag `cluster-autoscaler/node-ephemeral-storage` on the node pool, if set (e.g.
+     `40Gi`). This always takes priority.
+  2. Otherwise, the boot-volume size configured in `NodeSourceDetails.BootVolumeSizeInGBs` is used.
+     Note that this is the **raw disk size**, not the kubelet allocatable value — actual allocatable
+     ephemeral-storage will be somewhat lower due to OS/rootfs usage, kube-reserved, system-reserved,
+     and eviction headroom. Use the freeform tag for a tighter bound if needed.
+  3. If neither is available, `ephemeral-storage` is left unset on the template node. In this case
+     any pod that requests `ephemeral-storage` will fail to trigger a scale-up from zero.
+
+  **Recommendation**: if your workloads request `ephemeral-storage` and your node pool may scale from
+  zero, either ensure `NodeSourceDetails.BootVolumeSizeInGBs` is set on the node pool, or add the
+  freeform tag `cluster-autoscaler/node-ephemeral-storage=<value>` with a value at or below the real
+  node's kubelet-reported `allocatable.ephemeral-storage`.
 
 ## Helpful links
 - [Oracle Cloud Infrastructure home](https://cloud.oracle.com)
