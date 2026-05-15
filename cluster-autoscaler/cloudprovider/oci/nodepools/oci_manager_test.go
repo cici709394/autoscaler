@@ -20,6 +20,7 @@ import (
 
 	ocicommon "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/common"
 	oke "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/vendor-internal/github.com/oracle/oci-go-sdk/v65/containerengine"
+	core "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/oci/vendor-internal/github.com/oracle/oci-go-sdk/v65/core"
 )
 
 const (
@@ -569,6 +570,157 @@ func TestValidateNodePoolTags(t *testing.T) {
 			result := validateNodepoolTags(tc.nodeGroupTags, tc.freeFormTags, tc.definedTags)
 			if result != tc.expectedResult {
 				t.Errorf("Testcase '%s' failed: got %t ; expected %t", name, result, tc.expectedResult)
+			}
+		})
+	}
+}
+
+// mockShapeGetter is a test fake for ocicommon.ShapeGetter.
+type mockShapeGetter struct {
+	shape *ocicommon.Shape
+}
+
+func (m *mockShapeGetter) GetNodePoolShape(_ *oke.NodePool, ephemeralStorage int64) (*ocicommon.Shape, error) {
+	s := *m.shape
+	s.EphemeralStorageInBytes = float32(ephemeralStorage)
+	return &s, nil
+}
+
+func (m *mockShapeGetter) GetInstancePoolShape(_ *core.InstancePool) (*ocicommon.Shape, error) {
+	return m.shape, nil
+}
+
+func (m *mockShapeGetter) Refresh() {}
+
+// mockTagsGetter is a test fake for ocicommon.TagsGetter.
+type mockTagsGetter struct {
+	tags map[string]string
+}
+
+func (m *mockTagsGetter) GetNodePoolFreeformTags(_ *oke.NodePool) (map[string]string, error) {
+	return m.tags, nil
+}
+
+// mockTaintsGetter is a test fake for RegisteredTaintsGetter.
+type mockTaintsGetter struct{}
+
+func (m *mockTaintsGetter) Get(_ *oke.NodePool) ([]apiv1.Taint, error) {
+	return []apiv1.Taint{}, nil
+}
+
+// newTestNodePool builds a minimal oke.NodePool suitable for buildNodeFromTemplate tests.
+func newTestNodePool(freeformTags map[string]string, nodeSourceDetails oke.NodeSourceDetails) *oke.NodePool {
+	return &oke.NodePool{
+		Id:        common.String("ocid1.nodepool.oc1.iad.test"),
+		NodeShape: common.String("VM.Standard2.1"),
+		NodeShapeConfig: &oke.NodeShapeConfig{
+			Ocpus:       common.Float32(1),
+			MemoryInGBs: common.Float32(15),
+		},
+		FreeformTags: freeformTags,
+		NodeConfigDetails: &oke.NodePoolNodeConfigDetails{
+			PlacementConfigs: []oke.NodePoolPlacementConfigDetails{
+				{AvailabilityDomain: common.String("hash:US-ASHBURN-1")},
+			},
+		},
+		NodeSourceDetails: nodeSourceDetails,
+	}
+}
+
+func TestBuildNodeFromTemplateEphemeralStorage(t *testing.T) {
+	const (
+		tagValue50Gi = "50Gi"
+		// 50 * 1024^3
+		bytes50Gi = int64(50 * 1024 * 1024 * 1024)
+		// 100 * 1024^3
+		bytes100Gi = int64(100 * 1024 * 1024 * 1024)
+	)
+
+	bootVolumeSize50 := int64(50)
+
+	baseShape := &ocicommon.Shape{
+		Name:          "VM.Standard2.1",
+		CPU:           2,
+		MemoryInBytes: 15 * 1024 * 1024 * 1024,
+		GPU:           0,
+	}
+
+	testCases := map[string]struct {
+		freeformTags          map[string]string
+		nodeSourceDetails     oke.NodeSourceDetails
+		wantEphemeralStorage  int64
+		wantEphemeralPresent  bool
+	}{
+		"tag set, no boot volume: tag wins": {
+			freeformTags: map[string]string{
+				consts.EphemeralStorageSize: tagValue50Gi,
+			},
+			nodeSourceDetails:    nil,
+			wantEphemeralStorage: bytes50Gi,
+			wantEphemeralPresent: true,
+		},
+		"tag absent, boot volume 50: boot volume used": {
+			freeformTags: nil,
+			nodeSourceDetails: oke.NodeSourceViaImageDetails{
+				ImageId:             common.String("ocid1.image.test"),
+				BootVolumeSizeInGBs: &bootVolumeSize50,
+			},
+			wantEphemeralStorage: bytes50Gi,
+			wantEphemeralPresent: true,
+		},
+		"tag set and boot volume set: tag wins": {
+			freeformTags: map[string]string{
+				consts.EphemeralStorageSize: "100Gi",
+			},
+			nodeSourceDetails: oke.NodeSourceViaImageDetails{
+				ImageId:             common.String("ocid1.image.test"),
+				BootVolumeSizeInGBs: &bootVolumeSize50,
+			},
+			wantEphemeralStorage: bytes100Gi,
+			wantEphemeralPresent: true,
+		},
+		"tag value invalid, boot volume set: boot volume used": {
+			freeformTags: map[string]string{
+				consts.EphemeralStorageSize: "not-a-quantity",
+			},
+			nodeSourceDetails: oke.NodeSourceViaImageDetails{
+				ImageId:             common.String("ocid1.image.test"),
+				BootVolumeSizeInGBs: &bootVolumeSize50,
+			},
+			wantEphemeralStorage: bytes50Gi,
+			wantEphemeralPresent: true,
+		},
+		"tag absent, NodeSourceDetails nil: ephemeral-storage not set": {
+			freeformTags:         nil,
+			nodeSourceDetails:    nil,
+			wantEphemeralPresent: false,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			nodePool := newTestNodePool(tc.freeformTags, tc.nodeSourceDetails)
+
+			manager := &ociManagerImpl{
+				ociShapeGetter:         &mockShapeGetter{shape: baseShape},
+				ociTagsGetter:          &mockTagsGetter{tags: tc.freeformTags},
+				registeredTaintsGetter: &mockTaintsGetter{},
+			}
+
+			node, err := manager.buildNodeFromTemplate(nodePool)
+			if err != nil {
+				t.Fatalf("buildNodeFromTemplate returned unexpected error: %v", err)
+			}
+
+			qty, present := node.Status.Capacity[apiv1.ResourceEphemeralStorage]
+			if present != tc.wantEphemeralPresent {
+				t.Errorf("ResourceEphemeralStorage present=%v; want %v", present, tc.wantEphemeralPresent)
+			}
+			if tc.wantEphemeralPresent {
+				got := qty.Value()
+				if got != tc.wantEphemeralStorage {
+					t.Errorf("ResourceEphemeralStorage = %d bytes; want %d bytes", got, tc.wantEphemeralStorage)
+				}
 			}
 		})
 	}

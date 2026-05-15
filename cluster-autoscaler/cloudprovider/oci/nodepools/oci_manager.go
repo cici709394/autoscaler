@@ -730,6 +730,21 @@ func (m *ociManagerImpl) buildNodeFromTemplate(nodePool *oke.NodePool) (*apiv1.N
 	if err != nil {
 		klog.Error(err)
 	}
+
+	// Ephemeral-storage precedence for OKE node pool template nodes (scale from 0):
+	//  1. A valid freeform tag "cluster-autoscaler/node-ephemeral-storage" wins if set.
+	//  2. Otherwise, boot-volume size from NodeSourceDetails.BootVolumeSizeInGBs is used as
+	//     a fallback. Note: this is the raw disk size, not kubelet allocatable; actual
+	//     allocatable will be slightly lower due to OS/rootfs, kube-reserved, and eviction
+	//     headroom. Use the freeform tag for a tighter override.
+	//  3. Otherwise, ephemeral-storage is left unset on the template node.
+	if ephemeralStorage == -1 {
+		if src, ok := nodePool.NodeSourceDetails.(oke.NodeSourceViaImageDetails); ok && src.BootVolumeSizeInGBs != nil {
+			ephemeralStorage = *src.BootVolumeSizeInGBs * 1024 * 1024 * 1024
+			klog.V(2).Infof("ephemeral-storage not set via freeform tag; derived from boot-volume-size: %d bytes", ephemeralStorage)
+		}
+	}
+
 	shape, err := m.ociShapeGetter.GetNodePoolShape(nodePool, ephemeralStorage)
 	if err != nil {
 		return nil, err
