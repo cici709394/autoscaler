@@ -679,6 +679,17 @@ func TestBuildNodeFromTemplateEphemeralStorage(t *testing.T) {
 			wantEphemeralStorage: bytes100Gi,
 			wantEphemeralPresent: true,
 		},
+		"tag value invalid, boot volume set: boot volume used": {
+			freeformTags: map[string]string{
+				consts.EphemeralStorageSize: "not-a-quantity",
+			},
+			nodeSourceDetails: oke.NodeSourceViaImageDetails{
+				ImageId:             common.String("ocid1.image.test"),
+				BootVolumeSizeInGBs: &bootVolumeSize50,
+			},
+			wantEphemeralStorage: bytes50Gi,
+			wantEphemeralPresent: true,
+		},
 		"tag absent, NodeSourceDetails nil: ephemeral-storage not set": {
 			freeformTags:         nil,
 			nodeSourceDetails:    nil,

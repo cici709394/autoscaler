@@ -732,7 +732,7 @@ func (m *ociManagerImpl) buildNodeFromTemplate(nodePool *oke.NodePool) (*apiv1.N
 	}
 
 	// Ephemeral-storage precedence for OKE node pool template nodes (scale from 0):
-	//  1. Freeform tag "cluster-autoscaler/node-ephemeral-storage" wins if set.
+	//  1. A valid freeform tag "cluster-autoscaler/node-ephemeral-storage" wins if set.
 	//  2. Otherwise, boot-volume size from NodeSourceDetails.BootVolumeSizeInGBs is used as
 	//     a fallback. Note: this is the raw disk size, not kubelet allocatable; actual
 	//     allocatable will be slightly lower due to OS/rootfs, kube-reserved, and eviction
